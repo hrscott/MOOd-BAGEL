@@ -1,9 +1,15 @@
 from __future__ import annotations
-import os, tempfile, subprocess, json, pathlib
+import os
+import shutil
+import tempfile
+import subprocess
+import pathlib
 from typing import Dict
+
 from design_framework.core.base import Oracle
 
 _HYDROS = set("AILMVFWY")
+
 
 def _mean_bfactor_from_pdb(pdb_path: str) -> float:
     """
@@ -22,14 +28,12 @@ def _mean_bfactor_from_pdb(pdb_path: str) -> float:
                 n += 1
     return (total / n) if n else 0.0
 
+
 class FoldingOracle(Oracle):
     """
     Folding oracle with two modes:
-      - backend='stub' (default): deterministic composition-based fake pLDDT in 0..1
+      - backend='stub': deterministic composition-based fake pLDDT in 0..1
       - backend='colabfold': run `colabfold_batch` per chain (monomer) and derive mean pLDDT from PDB B-factors.
-    Notes:
-      * For simplicity, we run *per chain* as monomers and average pLDDT per chain.
-      * pTM and PAE are returned as 0.0 / None here; you can extend to parse result JSON/PAE if you run multimers.
     """
     def __init__(self, backend: str = "stub", models: int = 1, recycles: int = 1):
         self.backend = backend
@@ -48,10 +52,12 @@ class FoldingOracle(Oracle):
             return {"coords": {k: None for k in chains}, "pLDDT": plddt, "PAE": None, "pTM": 0.0}
 
         if self.backend == "colabfold":
-            # Ensure colabfold_batch exists
-            if not shutil.which("colabfold_batch"):
-                raise RuntimeError("colabfold_batch not found on PATH. Install ColabFold and ensure 'colabfold_batch' is available.")
-            import shutil
+            # Resolve colabfold_batch command once; DO NOT import or assign 'shutil' here
+            cmd_name = os.environ.get("COLABFOLD_CMD", "colabfold_batch")
+            if shutil.which(cmd_name) is None:
+                raise RuntimeError(
+                    f"'{cmd_name}' not found on PATH. Install ColabFold or set COLABFOLD_CMD=/full/path/to/colabfold_batch"
+                )
 
             plddt = {}
             with tempfile.TemporaryDirectory() as work:
@@ -59,20 +65,20 @@ class FoldingOracle(Oracle):
                 for name, seq in chains.items():
                     # write FASTA for this chain
                     fasta = work / f"{name}.fasta"
-                    with open(fasta, "w") as fh:
-                        fh.write(f">{name}\n{seq}\n")
+                    fasta.write_text(f">{name}\n{seq}\n")
 
                     outdir = work / f"out_{name}"
                     outdir.mkdir(parents=True, exist_ok=True)
+
                     cmd = [
-                        "colabfold_batch",
+                        cmd_name,
                         "--num-models", str(self.models),
                         "--num-recycle", str(self.recycles),
-                        str(fasta), str(outdir)
+                        str(fasta), str(outdir),
                     ]
-                    subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-
-                    # pick the first (or top-ranked) model pdb in output dir
+                    # run quietly; capture for debugging if needed
+                    proc = subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                    # pick first PDB in output dir
                     pdbs = sorted(outdir.glob("*.pdb"))
                     if not pdbs:
                         plddt[name] = 0.0
