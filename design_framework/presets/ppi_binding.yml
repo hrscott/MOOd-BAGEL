@@ -1,0 +1,30 @@
+initial_sequences:
+  binder: "AAAAAAAAAA"
+  partner: "BBBBBBBBBB"
+
+oracles:
+  - module: design_framework.oracles.folding_oracle
+    class: FoldingOracle
+    params:
+      backend: colabfold
+
+mutation_protocols:
+  - module: design_framework.mutation_protocols.random_mutator
+    class: RandomMutator
+    params:
+      p_mut: 0.1
+
+energy_terms:
+  - module: design_framework.energy_terms.plddt_energy
+    class: PLDDTEnergy
+    params:
+      weight: 1.0
+      scale: 1.0   # set 0.01 if pLDDT later comes in 0..100
+
+minimizer:
+  module: design_framework.minimizers.simple_mc
+  class: SimpleMinimizer
+  params:
+    steps: 200
+    t_init: 1.0
+    t_final: 0.1
