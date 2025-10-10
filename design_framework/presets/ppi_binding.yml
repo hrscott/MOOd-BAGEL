@@ -7,6 +7,8 @@ oracles:
     class: FoldingOracle
     params:
       backend: colabfold
+      models: 1
+      recycles: 1
 
 mutation_protocols:
   - module: design_framework.mutation_protocols.random_mutator
@@ -17,9 +19,13 @@ mutation_protocols:
 energy_terms:
   - module: design_framework.energy_terms.plddt_energy
     class: PLDDTEnergy
-    params:
-      weight: 1.0
-      scale: 1.0   # set 0.01 if pLDDT later comes in 0..100
+    params: { weight: 1.0, scale: 1.0 }
+  - module: design_framework.energy_terms.ptm_energy
+    class: PTMEnergy
+    params: { weight: 0.5 }
+  - module: design_framework.energy_terms.pae_energy
+    class: PAEEnergy
+    params: { weight: 0.5, scale: 0.032 }  # ~1/31
 
 minimizer:
   module: design_framework.minimizers.simple_mc
