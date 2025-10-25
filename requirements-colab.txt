@@ -1,0 +1,6 @@
+pyyaml>=6.0
+numpy>=1.24,<2.0
+scipy>=1.10,<1.11
+pandas>=2.0,<2.1
+# Colab GPU build (JAX pre-configured in Colab; colabfold pulls correct deps)
+colabfold[alphafold]==1.5.5
