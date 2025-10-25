@@ -36,6 +36,9 @@ class FoldingOracle(Oracle):
       - backend='colabfold': run `colabfold_batch` per chain (monomer) and derive mean pLDDT from PDB B-factors.
     """
     def __init__(self, backend: str = "stub", models: int = 1, recycles: int = 1):
+        # Auto-pick colabfold in Colab unless explicitly overridden
+        if backend == "stub" and "COLAB_RELEASE_TAG" in os.environ:
+            backend = "colabfold"
         self.backend = backend
         self.models = int(models)
         self.recycles = int(recycles)
