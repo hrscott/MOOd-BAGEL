@@ -119,11 +119,32 @@ class ColabDesignFoldingOracle(Oracle):
 
         seq_complex = self._build_complex_sequence(chains)
 
+        # ------------------------------------------------------------------
+        # ColabDesign expects certain internal fields (like `_len`) to be
+        # initialised before calling `predict(seq=...)`. In the standard
+        # notebooks this is done via `af_model.prep_inputs(...)`.
+        #
+        # For a pure-sequence use case we try the most direct option:
+        #   prep_inputs(seq=seq_complex)
+        # and only fall back to raw predict if this fails. This way we get
+        # a more informative error if the API is different in the installed
+        # ColabDesign version.
+        # ------------------------------------------------------------------
+        if not hasattr(self._af_model, "_len"):
+            prep = getattr(self._af_model, "prep_inputs", None)
+            if callable(prep):
+                try:
+                    # Many ColabDesign examples use prep_inputs(pdb_filename=...)
+                    # for backbone-based design. Here we rely on the seq-based
+                    # overload, if present.
+                    prep(seq=seq_complex)
+                except TypeError:
+                    # Signature doesn't support seq=..., we'll let predict()
+                    # raise a clearer error instead of the current _len issue.
+                    pass
+
         # ColabDesign AF model typically exposes a .predict(...) method that
         # fills `af_model.aux["log"]` with metrics including 'ptm' and 'plddt'.
-        # See e.g. "ProteinMPNN in Jax!" examples.
-        #
-        # We call it in a minimal configuration here.
         self._af_model.predict(
             seq=seq_complex,
             num_recycles=self.num_recycles,
