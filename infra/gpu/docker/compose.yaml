@@ -1,19 +1,40 @@
+name: gpu-workflow
 services:
-  colabdesign:
-    build:
-      context: .
-      dockerfile: colabdesign.Dockerfile
-    image: bagel-colabdesign:latest
-    env_file:
-      - .env
-    volumes:
-      - ${RESULTS_DIR:-./results}:/workspace/results
-      - ${INPUT_DIR:-./input}:/workspace/input:ro
-      - ${MODEL_CACHE:-./model-cache}:/workspace/model-cache
+  app:
+    image: ${IMAGE_REF}
+    command: ${APP_COMMAND}
     deploy:
       resources:
         reservations:
           devices:
             - driver: nvidia
+              count: ${GPU_COUNT}
               capabilities: [gpu]
-    command: ["python", "/workspace/code/colabdesign_mpnn_af_demo.py"]
+    environment:
+      NVIDIA_VISIBLE_DEVICES: ${NVIDIA_VISIBLE_DEVICES}
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+      NUM_GPUS: ${NUM_GPUS}
+    shm_size: ${SHM_SIZE}
+    ulimits:
+      nofile:
+        soft: ${NOFILE_SOFT}
+        hard: ${NOFILE_HARD}
+    volumes:
+      - ${CODE_DIR}:/workspace/code:rw
+      - ${DATA_DIR}:/workspace/data:ro
+      - ${OUTPUT_DIR}:/workspace/outputs:rw
+    working_dir: /workspace
+    tty: true
+
+  dcgm-exporter:
+    image: nvidia/dcgm-exporter:${DCGM_TAG}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: ${GPU_COUNT}
+              capabilities: [gpu]
+    ports:
+      - "${DCGM_PORT}:9400"
+    profiles: ["monitor"]
