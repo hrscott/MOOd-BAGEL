@@ -48,9 +48,33 @@ class ColabDesignFoldingOracle(Oracle):
         if self._af_model is not None:
             return
 
+        # ------------------------------------------------------------------
+        # JAX compatibility shim
+        #
+        # ColabDesign was written against older JAX versions that exposed
+        # `jax.tree_map`, `jax.tree_flatten`, and `jax.tree_unflatten`
+        # at the top level. Newer JAX releases removed these in favour of
+        # jax.tree_util.*. We recreate the old attributes here so that
+        # ColabDesign code continues to work.
+        # ------------------------------------------------------------------
         try:
-            # ColabDesign >= v1.1 typically exposes mk_af_model at top level
-            from colabdesign import mk_af_model  # type: ignore
+            import jax  # type: ignore
+            from jax import tree_util as jtu  # type: ignore
+
+            if not hasattr(jax, "tree_map"):
+                jax.tree_map = jtu.tree_map  # type: ignore[attr-defined]
+            if not hasattr(jax, "tree_flatten"):
+                jax.tree_flatten = jtu.tree_flatten  # type: ignore[attr-defined]
+            if not hasattr(jax, "tree_unflatten"):
+                jax.tree_unflatten = jtu.tree_unflatten  # type: ignore[attr-defined]
+        except ImportError:
+            # If JAX isn't available, the subsequent colabdesign import will
+            # fail anyway; we don't need to do anything special here.
+            pass
+
+        try:
+            # ColabDesign typically exposes mk_af_model via the af submodule
+            from colabdesign.af import mk_af_model  # type: ignore
         except ImportError as exc:
             raise RuntimeError(
                 "ColabDesignFoldingOracle requires the 'colabdesign' package "
@@ -61,6 +85,7 @@ class ColabDesignFoldingOracle(Oracle):
 
         # mk_af_model() defaults are usually fine; model_name kept for future use
         self._af_model = mk_af_model()
+
 
     def _build_complex_sequence(self, chains: Dict[str, str]) -> str:
         """
