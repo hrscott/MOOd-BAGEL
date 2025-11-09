@@ -1,0 +1,51 @@
+# PPI-style binder design using ColabDesign-backed AlphaFold scoring.
+#
+# This config is meant to run INSIDE the ColabDesign GPU container, where
+# the `colabdesign` Python package and AlphaFold params are available.
+#
+# For local / CPU-only testing, use `ppi_binding_stub.yml` instead.
+
+initial_sequences:
+  binder: AAAAAAAAAA
+  partner: FFFFFFFFFF
+
+oracles:
+  - module: design_framework.oracles.colabdesign_oracle
+    class: ColabDesignFoldingOracle
+    params:
+      num_models: 1
+      num_recycles: 1
+      model_name: "af2"
+      random_seed: 42
+
+mutation_protocols:
+  - module: design_framework.mutation_protocols.random_mutator
+    class: RandomMutator
+    params:
+      p_mut: 0.1
+
+energy_terms:
+  - module: design_framework.energy_terms.plddt_energy
+    class: PLDDTEnergy
+    params:
+      weight: 1.0
+      scale: 1.0
+
+  - module: design_framework.energy_terms.ptm_energy
+    class: PTMEnergy
+    params:
+      weight: 0.5
+
+  - module: design_framework.energy_terms.pae_energy
+    class: PAEEnergy
+    params:
+      weight: 0.5
+      scale: 1.0
+
+minimizer:
+  module: design_framework.minimizers.simple_mc
+  class: SimpleMinimizer
+  params:
+    steps: 200
+    t_init: 1.0
+    t_final: 0.1
