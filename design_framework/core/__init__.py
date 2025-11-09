@@ -1,22 +1,23 @@
-"""Core components for the design framework."""
+"""
+Public API for the lightweight design_framework core.
 
-from bagel.system import System
-from bagel.state import State
-from bagel.energies import EnergyTerm as BagelEnergyTerm
-from bagel.oracles.base import Oracle as BagelOracle
-from bagel.mutation import MutationProtocol as BagelMutationProtocol
-from bagel.minimizer import Minimizer as BagelMinimizer
+For now we only expose the minimal base interfaces:
+  - Oracle
+  - EnergyTerm
+  - MutationProtocol
+  - Minimizer
 
-BaseSystem = System
-BaseState = State
+Integration with the full BAGEL System/State types is intentionally
+deferred so that design_framework can be used in environments where
+the heavy `bagel` dependencies (biotite, boileroom, etc.) are not
+installed yet.
+"""
+
+from .base import Oracle, EnergyTerm, MutationProtocol, Minimizer
 
 __all__ = [
-    "System",
-    "State",
-    "BagelEnergyTerm",
-    "BagelOracle",
-    "BagelMutationProtocol",
-    "BagelMinimizer",
-    "BaseSystem",
-    "BaseState",
+    "Oracle",
+    "EnergyTerm",
+    "MutationProtocol",
+    "Minimizer",
 ]
