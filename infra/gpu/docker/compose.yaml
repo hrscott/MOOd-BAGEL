@@ -1,0 +1,19 @@
+services:
+  colabdesign:
+    build:
+      context: .
+      dockerfile: colabdesign.Dockerfile
+    image: bagel-colabdesign:latest
+    env_file:
+      - .env
+    volumes:
+      - ${RESULTS_DIR:-./results}:/workspace/results
+      - ${INPUT_DIR:-./input}:/workspace/input:ro
+      - ${MODEL_CACHE:-./model-cache}:/workspace/model-cache
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              capabilities: [gpu]
+    command: ["python", "/workspace/code/colabdesign_mpnn_af_demo.py"]

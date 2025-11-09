@@ -1,0 +1,3 @@
+# Placeholder requirements for the ColabDesign GPU workflow.
+colabdesign
+protein-mpnns
