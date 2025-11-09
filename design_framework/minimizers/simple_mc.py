@@ -1,81 +1,147 @@
+from __future__ import annotations
+
 import math
 import random
-from copy import deepcopy
-from typing import Dict, List
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional
 
-class SimpleMinimizer:
+from design_framework.core.base import Minimizer, Oracle, MutationProtocol, EnergyTerm
+
+
+@dataclass
+class SimpleMinimizer(Minimizer):
     """
     Minimal Monte Carlo + linear annealing minimizer.
-    Expects `system` dict with keys:
-      - sequences: Dict[str, str]
-      - oracles: List[Oracle]
-      - mutation_protocols: List[MutationProtocol]
-      - energy_terms: List[EnergyTerm]
-    """
-    def __init__(self, steps: int = 500, t_init: float = 1.0, t_final: float = 0.1, proposal_freqs: List[int] = None):
-        self.steps = steps
-        self.t_init = t_init
-        self.t_final = t_final
-        self.proposal_freqs = proposal_freqs  # optional: not used in this minimal version
 
-    def _compute_oracles(self, sequences: Dict[str, str], oracles: List) -> Dict:
-        # Accumulate outputs into a single dict of dicts; later terms can read them.
-        outputs = {}
-        for o in oracles:
-            out = o.compute(sequences)
-            # merge dicts shallowly
-            for k, v in out.items():
-                if k not in outputs:
-                    outputs[k] = v
-                else:
-                    # If duplicate keys, last writer wins for simplicity
-                    outputs[k] = v
+    Expects a `system` dict with keys:
+      - "sequences": Dict[str, str]
+      - "oracles": List[Oracle]
+      - "mutation_protocols": List[MutationProtocol]
+      - "energy_terms": List[EnergyTerm]
+
+    Parameters
+    ----------
+    steps:
+        Number of MC steps.
+    t_init:
+        Initial (high) temperature.
+    t_final:
+        Final (low) temperature.
+    proposal_freqs:
+        Optional list of integer frequencies, same length as mutation_protocols.
+        Controls how often each mutator is chosen. If None, choose uniformly.
+    """
+
+    steps: int = 500
+    t_init: float = 1.0
+    t_final: float = 0.1
+    proposal_freqs: Optional[List[int]] = None
+
+    # internal fields (not passed from config)
+    _temperatures: List[float] = field(init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        if self.steps <= 0:
+            raise ValueError("steps must be positive")
+        # Precompute linear schedule
+        if self.steps == 1:
+            self._temperatures = [self.t_final]
+        else:
+            self._temperatures = [
+                self.t_init + (self.t_final - self.t_init) * (i / (self.steps - 1))
+                for i in range(self.steps)
+            ]
+
+    def _evaluate_oracles(self, sequences: Dict[str, str], oracles: List[Oracle]) -> Dict[str, Any]:
+        """Run all oracles and merge their outputs into a single dict."""
+        outputs: Dict[str, Any] = {}
+        for oracle in oracles:
+            out = oracle.compute(sequences)
+            if not isinstance(out, dict):
+                raise ValueError(f"Oracle {oracle} returned non-dict output: {type(out)}")
+            # later oracles can overwrite keys if necessary
+            outputs.update(out)
         return outputs
 
-    def _energy(self, oracle_outputs: Dict, energy_terms: List, system_state: Dict) -> float:
-        return sum(term.evaluate(oracle_outputs, system_state) for term in energy_terms)
+    def _evaluate_energy(self, oracle_outputs: Dict[str, Any], energy_terms: List[EnergyTerm], system_state: Dict[str, Any]) -> float:
+        energy = 0.0
+        for term in energy_terms:
+            e = term.evaluate(oracle_outputs, system_state)
+            energy += float(e)
+        return energy
 
-    def _temperature(self, step: int) -> float:
-        if self.steps <= 1:
-            return self.t_final
-        # linear schedule
-        return self.t_init + (self.t_final - self.t_init) * (step / (self.steps - 1))
+    def _choose_mutator(self, mutators: List[MutationProtocol]) -> MutationProtocol:
+        if not mutators:
+            raise ValueError("No mutation protocols provided")
+        if self.proposal_freqs is None:
+            return random.choice(mutators)
+        if len(self.proposal_freqs) != len(mutators):
+            raise ValueError("proposal_freqs length must match number of mutation protocols")
+        # Weighted choice
+        total = sum(self.proposal_freqs)
+        r = random.uniform(0, total)
+        acc = 0.0
+        for freq, mut in zip(self.proposal_freqs, mutators):
+            acc += freq
+            if r <= acc:
+                return mut
+        # Fallback (numerical edge)
+        return mutators[-1]
 
-    def run(self, system: Dict) -> Dict:
-        sequences = deepcopy(system["sequences"])
-        oracles = system["oracles"]
-        muts = system["mutation_protocols"]
-        terms = system["energy_terms"]
+    def run(self, system: Dict[str, Any]) -> Dict[str, Any]:
+        # Unpack system
+        sequences: Dict[str, str] = dict(system.get("sequences", {}))
+        oracles: List[Oracle] = list(system.get("oracles", []))
+        mutators: List[MutationProtocol] = list(system.get("mutation_protocols", []))
+        energy_terms: List[EnergyTerm] = list(system.get("energy_terms", []))
+
+        if not sequences:
+            raise ValueError("System must contain non-empty 'sequences'")
 
         # Initial evaluation
-        oracle_outputs = self._compute_oracles(sequences, oracles)
-        state = {"sequences": sequences}
-        energy = self._energy(oracle_outputs, terms, state)
+        oracle_outputs = self._evaluate_oracles(sequences, oracles)
+        energy = self._evaluate_energy(oracle_outputs, energy_terms, {"sequences": sequences})
 
-        best = {"sequences": deepcopy(sequences), "energy": energy, "step": 0}
+        best = {
+            "sequences": dict(sequences),
+            "energy": energy,
+            "step": 0,
+        }
 
-        for step in range(1, self.steps + 1):
-            T = self._temperature(step)
+        for step in range(self.steps):
+            T = self._temperatures[step]
+            mut = self._choose_mutator(mutators)
 
-            # pick one mutator uniformly
-            mut = random.choice(muts)
-            proposal = mut.propose(sequences, oracle_outputs)
+            # Propose new sequences
+            proposed_sequences = mut.propose(sequences, oracle_outputs)
 
-            # evaluate new state
-            oracle_outputs_new = self._compute_oracles(proposal, oracles)
-            state_new = {"sequences": proposal}
-            energy_new = self._energy(oracle_outputs_new, terms, state_new)
+            # Re-evaluate oracles and energy for proposal
+            proposed_oracle_outputs = self._evaluate_oracles(proposed_sequences, oracles)
+            proposed_energy = self._evaluate_energy(
+                proposed_oracle_outputs, energy_terms, {"sequences": proposed_sequences}
+            )
 
-            dE = energy_new - energy
-            accept = dE <= 0 or random.random() < math.exp(-dE / max(T, 1e-8))
+            dE = proposed_energy - energy
+            accept = False
+            if dE <= 0:
+                accept = True
+            else:
+                if T <= 0:
+                    accept = False
+                else:
+                    p = math.exp(-dE / T)
+                    if random.random() < p:
+                        accept = True
 
             if accept:
-                sequences = proposal
-                oracle_outputs = oracle_outputs_new
-                energy = energy_new
+                sequences = proposed_sequences
+                oracle_outputs = proposed_oracle_outputs
+                energy = proposed_energy
 
                 if energy < best["energy"]:
-                    best = {"sequences": deepcopy(sequences), "energy": energy, "step": step}
+                    best["energy"] = energy
+                    best["sequences"] = dict(sequences)
+                    best["step"] = step + 1
 
         return {
             "best_sequences": best["sequences"],
