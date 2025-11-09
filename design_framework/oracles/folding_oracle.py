@@ -1,94 +1,97 @@
 from __future__ import annotations
-import os
-import shutil
-import tempfile
-import subprocess
-import pathlib
-from typing import Dict
+
+from dataclasses import dataclass, field
+from typing import Any, Dict, Literal, Optional
+
+import numpy as np
 
 from design_framework.core.base import Oracle
 
-_HYDROS = set("AILMVFWY")
 
-
-def _mean_bfactor_from_pdb(pdb_path: str) -> float:
-    """
-    Minimal PDB parser to average B-factor (columns 61-66) across ATOM rows.
-    In AF/ColabFold outputs, B-factor stores pLDDT (0..100).
-    """
-    total, n = 0.0, 0
-    with open(pdb_path, "r") as fh:
-        for line in fh:
-            if line.startswith("ATOM"):
-                try:
-                    b = float(line[60:66])
-                except Exception:
-                    continue
-                total += b
-                n += 1
-    return (total / n) if n else 0.0
-
-
+@dataclass
 class FoldingOracle(Oracle):
     """
-    Folding oracle with two modes:
-      - backend='stub': deterministic composition-based fake pLDDT in 0..1
-      - backend='colabfold': run `colabfold_batch` per chain (monomer) and derive mean pLDDT from PDB B-factors.
+    Minimal folding oracle abstraction.
+
+    For now we implement only a 'stub' backend that returns random-but-plausible
+    values for pLDDT, pTM and PAE so that the rest of the MC pipeline can be
+    exercised end-to-end.
+
+    Later, this class will grow additional backends, e.g.:
+      - 'colabdesign' using colabdesign.af
+      - 'colabfold' using the colabfold Python API
+
+    Parameters
+    ----------
+    backend:
+        Currently only 'stub' is supported. This keeps the config interface
+        stable while we incrementally wire in real GPU-backed oracles.
+    seed:
+        Optional random seed for reproducible stub behaviour.
     """
-    def __init__(self, backend: str = "stub", models: int = 1, recycles: int = 1):
-        # Auto-pick colabfold in Colab unless explicitly overridden
-        if backend == "stub" and "COLAB_RELEASE_TAG" in os.environ:
-            backend = "colabfold"
-        self.backend = backend
-        self.models = int(models)
-        self.recycles = int(recycles)
 
-    def compute(self, chains: Dict[str, str]) -> Dict:
+    backend: Literal["stub"] = "stub"
+    seed: Optional[int] = None
+
+    # internal RNG, initialised in __post_init__
+    _rng: np.random.Generator = field(init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        if self.backend != "stub":
+            raise ValueError(
+                f"Unsupported backend '{self.backend}' in FoldingOracle. "
+                "Only 'stub' is implemented in this minimal version."
+            )
+        self._rng = np.random.default_rng(self.seed)
+
+    def compute(self, chains: Dict[str, str]) -> Dict[str, Any]:
+        """
+        Compute oracle outputs for the given sequences.
+
+        Parameters
+        ----------
+        chains:
+            Mapping chain_name -> amino-acid sequence.
+
+        Returns
+        -------
+        dict with at least:
+          - 'pLDDT': Dict[str, float]   # per-chain mean pLDDT in [0, 1]
+          - 'pTM': float                # scalar pTM in [0, 1]
+          - 'PAE': np.ndarray           # (L, L) pairwise error matrix
+        """
         if self.backend == "stub":
-            plddt = {}
-            for name, seq in chains.items():
-                if not seq:
-                    plddt[name] = 0.0
-                    continue
-                frac_h = sum(aa in _HYDROS for aa in seq) / max(1, len(seq))
-                plddt[name] = 0.2 + 0.7 * frac_h  # 0..1
-            return {"coords": {k: None for k in chains}, "pLDDT": plddt, "PAE": None, "pTM": 0.0}
+            return self._compute_stub(chains)
 
-        if self.backend == "colabfold":
-            # Resolve colabfold_batch command once; DO NOT import or assign 'shutil' here
-            cmd_name = os.environ.get("COLABFOLD_CMD", "colabfold_batch")
-            if shutil.which(cmd_name) is None:
-                raise RuntimeError(
-                    f"'{cmd_name}' not found on PATH. Install ColabFold or set COLABFOLD_CMD=/full/path/to/colabfold_batch"
-                )
+        # Future: 'colabdesign' / 'colabfold' backends live here.
+        raise RuntimeError(f"Backend '{self.backend}' not implemented")
 
-            plddt = {}
-            with tempfile.TemporaryDirectory() as work:
-                work = pathlib.Path(work)
-                for name, seq in chains.items():
-                    # write FASTA for this chain
-                    fasta = work / f"{name}.fasta"
-                    fasta.write_text(f">{name}\n{seq}\n")
+    # ------------------------------------------------------------------
+    # Stub backend
+    # ------------------------------------------------------------------
+    def _compute_stub(self, chains: Dict[str, str]) -> Dict[str, Any]:
+        # Per-chain mean pLDDT in [0.7, 0.95] (reasonably confident)
+        plddt: Dict[str, float] = {}
+        for name, seq in chains.items():
+            _ = len(seq)  # not used yet, but kept for future extension
+            plddt[name] = float(self._rng.uniform(0.7, 0.95))
 
-                    outdir = work / f"out_{name}"
-                    outdir.mkdir(parents=True, exist_ok=True)
+        # Global pTM in [0.5, 0.9]
+        ptm = float(self._rng.uniform(0.5, 0.9))
 
-                    cmd = [
-                        cmd_name,
-                        "--num-models", str(self.models),
-                        "--num-recycle", str(self.recycles),
-                        str(fasta), str(outdir),
-                    ]
-                    # run quietly; capture for debugging if needed
-                    proc = subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                    # pick first PDB in output dir
-                    pdbs = sorted(outdir.glob("*.pdb"))
-                    if not pdbs:
-                        plddt[name] = 0.0
-                        continue
-                    mean_b = _mean_bfactor_from_pdb(str(pdbs[0]))  # pLDDT in 0..100
-                    plddt[name] = max(0.0, min(1.0, mean_b / 100.0))
+        # Simple synthetic PAE matrix over the concatenated length of all chains
+        total_len = sum(len(seq) for seq in chains.values())
+        if total_len == 0:
+            # Degenerate, but avoid crashing
+            pae = np.zeros((0, 0), dtype=float)
+        else:
+            pae = self._rng.uniform(1.0, 5.0, size=(total_len, total_len))
+            # Lower error on the diagonal to roughly emulate "self" certainty
+            diag_vals = self._rng.uniform(0.1, 1.0, size=(total_len,))
+            np.fill_diagonal(pae, diag_vals)
 
-            return {"coords": {k: None for k in chains}, "pLDDT": plddt, "PAE": None, "pTM": 0.0}
-
-        raise ValueError(f"Unsupported backend: {self.backend}")
+        return {
+            "pLDDT": plddt,
+            "pTM": ptm,
+            "PAE": pae,
+        }
