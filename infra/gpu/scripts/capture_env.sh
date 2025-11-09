@@ -1,29 +1,29 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-OUTPUT_FILE="${1:-${SCRIPT_DIR}/../artifacts/host_env.txt}"
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+DOCKER_DIR="$ROOT_DIR/docker"
+timestamp="$(date +%Y%m%d-%H%M%S)"
+OUT_DIR="$ROOT_DIR/env-capture/$timestamp"
 
-mkdir -p "$(dirname "${OUTPUT_FILE}")"
+mkdir -p "$OUT_DIR"
 
-echo "[capture-env] Writing host environment report to ${OUTPUT_FILE}" \
-  | tee "${OUTPUT_FILE}"
+echo "==> Capturing environment info into $OUT_DIR"
 
-{
-  echo "# Host Environment Report"
-  echo
-  echo "## Docker"
-  docker version
-  echo
-  echo "## NVIDIA SMI"
-  if command -v nvidia-smi >/dev/null 2>&1; then
-    nvidia-smi
-  else
-    echo "nvidia-smi not available"
-  fi
-  echo
-  echo "## GPU Workflow Variables"
-  env | grep -E 'RESULTS_DIR|INPUT_DIR|MODEL_CACHE' || true
-} >>"${OUTPUT_FILE}"
+if command -v nvidia-smi >/dev/null 2>&1; then
+  nvidia-smi -q > "$OUT_DIR/nvidia-smi.txt"
+fi
 
-echo "[capture-env] Done." >>"${OUTPUT_FILE}"
+if docker info >/dev/null 2>&1; then
+  docker info > "$OUT_DIR/docker-info.txt"
+elif sudo docker info >/dev/null 2>&1; then
+  sudo docker info > "$OUT_DIR/docker-info.txt"
+fi
+
+if [ -d "$DOCKER_DIR" ]; then
+  ( cd "$DOCKER_DIR" && docker compose config > "$OUT_DIR/compose.resolved.yaml" ) || true
+fi
+
+cp "$DOCKER_DIR/.env" "$OUT_DIR/.env.snapshot" 2>/dev/null || true
+
+echo "✅ Environment captured."
