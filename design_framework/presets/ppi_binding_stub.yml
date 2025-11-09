@@ -1,0 +1,53 @@
+# Minimal PPI-style binder design using the stub FoldingOracle.
+#
+# This is intended as a smoke test for the design_framework pipeline:
+#   sequences -> mutation -> oracle -> energy -> MC minimization
+#
+# Once this works end-to-end, we can swap the oracle backend from 'stub'
+# to a real GPU-backed implementation (e.g. colabdesign).
+
+initial_sequences:
+  binder: AAAAAAAAAA
+  partner: FFFFFFFFFF
+
+oracles:
+  - module: design_framework.oracles.folding_oracle
+    class: FoldingOracle
+    params:
+      backend: stub
+      seed: 42
+
+mutation_protocols:
+  - module: design_framework.mutation_protocols.random_mutator
+    class: RandomMutator
+    params:
+      p_mut: 0.1
+
+energy_terms:
+  # Reward high per-chain mean pLDDT (values in [0, 1])
+  - module: design_framework.energy_terms.plddt_energy
+    class: PLDDTEnergy
+    params:
+      weight: 1.0
+      scale: 1.0
+
+  # Reward high global pTM
+  - module: design_framework.energy_terms.ptm_energy
+    class: PTMEnergy
+    params:
+      weight: 0.5
+
+  # Penalize high mean PAE (after internal scaling in the energy term)
+  - module: design_framework.energy_terms.pae_energy
+    class: PAEEnergy
+    params:
+      weight: 0.5
+      scale: 1.0
+
+minimizer:
+  module: design_framework.minimizers.simple_mc
+  class: SimpleMinimizer
+  params:
+    steps: 200
+    t_init: 1.0
+    t_final: 0.1
