@@ -1,14 +1,34 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-COMPOSE_FILE="${SCRIPT_DIR}/../docker/compose.yaml"
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-SERVICE=${1:-colabdesign}
+cd "$ROOT_DIR"
 
-if ! docker compose -f "${COMPOSE_FILE}" ps "${SERVICE}" >/dev/null 2>&1; then
-  echo "[colabdesign-shell] Bringing up ${SERVICE} container..."
-  docker compose -f "${COMPOSE_FILE}" up -d "${SERVICE}"
+# Reuse the same docker detection logic as other scripts
+pick_docker_cmd() {
+  if docker info > /dev/null 2>&1; then
+    echo "docker"
+  elif sudo docker info > /dev/null 2>&1; then
+    echo "sudo docker"
+  else
+    echo ""
+  fi
+}
+
+DOCKER_CMD="$(pick_docker_cmd)"
+if [ -z "$DOCKER_CMD" ]; then
+  echo "ERROR: Cannot talk to Docker daemon (even with sudo)."
+  exit 1
 fi
 
-docker compose -f "${COMPOSE_FILE}" exec "${SERVICE}" /bin/bash
+CONTAINER_NAME="$("$DOCKER_CMD" ps --filter 'name=gpu-workflow-app-1' --format '{{.Names}}')"
+
+if [ -z "$CONTAINER_NAME" ]; then
+  echo "ERROR: No running app container found."
+  echo "       Start it with: ./run_pipeline.sh up"
+  exit 1
+fi
+
+echo "==> Attaching shell to container: $CONTAINER_NAME"
+$DOCKER_CMD exec -it "$CONTAINER_NAME" bash
